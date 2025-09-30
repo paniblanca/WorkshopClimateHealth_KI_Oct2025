@@ -1,0 +1,599 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+# PRACTICAL SESSION: Linking Climate Data with Health Data for DLNM Analysis
+
+**Workshop:** Population Health Impacts from Climate Extremes and Climatic Factors  
+**Author:** Shivang (Karolinska Institutet)  
+**Duration:** 2-3 hours  
+**Level:** Intermediate
+
+---
+
+## Table of Contents
+
+1. [Introduction and Learning Objectives](#1-introduction-and-learning-objectives)
+2. [Prerequisites and Setup](#2-prerequisites-and-setup)  
+3. [Part A: Spatial Data Preparation and Intersection](#3-part-a-spatial-data-preparation-and-intersection)
+4. [Part B: Population-Weighted Temperature Calculation](#4-part-b-population-weighted-temperature-calculation)
+5. [Part C: Linking Climate Data with Health Data](#5-part-c-linking-climate-data-with-health-data)
+6. [Summary and Next Steps](#6-summary-and-next-steps)
+7. [Answer Key](#7-answer-key)
+
+---
+
+## 1. Introduction and Learning Objectives
+
+### Background
+
+Climate change is increasingly recognized as a major threat to public health. Understanding how climate exposures affect health outcomes requires sophisticated methods to link environmental data with health data. This practical session focuses on the crucial first step: preparing climate exposure data and linking it with health outcomes data for subsequent analysis using Distributed Lag Non-linear Models (DLNM).
+
+### Learning Objectives
+
+By the end of this practical session, you will be able to:
+
+1. **Understand spatial intersection concepts**: Learn how to intersect population grid data with administrative boundaries
+2. **Calculate population-weighted exposures**: Compute population-weighted temperature exposures by administrative district
+3. **Process climate data**: Extract and process daily temperature data from NetCDF files
+4. **Link exposures with health outcomes**: Merge climate exposures with health events data
+5. **Create time-series datasets**: Structure time series datasets suitable for distributed lag non-linear model analysis
+
+### Key Concepts
+
+- **Population weighting**: Adjusting environmental exposures based on where people actually live
+- **Spatial intersection**: Combining different spatial datasets to create new analytical units
+- **Time series preparation**: Creating complete datasets with daily observations for each individual
+- **Exposure assessment**: Quantifying environmental exposures for epidemiological analysis
+
+---
+
+## 2. Prerequisites and Setup
+
+### Required R Packages
+
+Before starting, ensure you have the following packages installed:
+
+```{r}
+install.packages(c("terra", "sf", "data.table", "exactextractr", 
+                   "lubridate", "gnm", "dlnm", "ggplot2"))
+```
+
+### Data Files Required
+
+- `totalbefolkning_stockholm_lan.gpkg` - Population grid data
+- `stockholm_lan_district.gpkg` - Administrative district boundaries  
+- `tas_NORDIC-3_SMHI-UERRA-Harmonie_RegRean_v1_Gridpp_v1.0.1_day_20180701-20180731.nc` - Temperature data
+- `health_events.csv` - Health outcomes data
+- `cohort_info.csv` - Individual characteristics
+- `tas_212098_daily.csv` - Daily temperature series
+
+### **Exercise 0: Setup Check**
+
+**Question 0.1:** Update the `base_dir` variable in the code to point to your working directory. What should this path be on your computer?
+
+**Question 0.2:** After loading the packages, run `sessionInfo()`. Which versions of `terra` and `sf` are you using? Why might package versions be important for reproducibility?
+
+---
+
+## 3. Part A: Spatial Data Preparation and Intersection
+
+### Theoretical Background
+
+**Population weighting** is crucial in environmental epidemiology because:
+- Environmental monitors don't always represent where people live
+- Administrative boundaries don't align with population distribution
+- We need to account for population density when calculating exposures
+
+**Spatial intersection** allows us to:
+- Combine different spatial datasets
+- Calculate area-weighted contributions
+- Preserve spatial relationships in our data
+
+### R Code for Part A
+
+```{r}
+# ==============================================================================
+# PART A: SPATIAL DATA PREPARATION AND INTERSECTION
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 0. PACKAGE LOADING AND SETUP
+# ------------------------------------------------------------------------------
+
+# Load required packages for spatial analysis and data manipulation
+library(terra)        # For raster and vector spatial data handling
+library(sf)           # For simple features (vector) spatial operations
+library(data.table)   # For fast data manipulation
+library(exactextractr) # For precise raster extraction from polygons
+library(lubridate)    # For date/time manipulation
+library(gnm)          # For generalized non-linear models
+library(dlnm)         # For distributed lag non-linear models
+library(ggplot2)      # For data visualization
+
+# ------------------------------------------------------------------------------
+# 1. PROJECT SETUP AND FILE PATHS
+# ------------------------------------------------------------------------------
+
+# Set your base folder path (MODIFY THIS PATH!)
+base_dir <- "REPLACE/ME/WITH/YOUR/PATH"  # Uncomment and modify this line
+
+# Define file paths for input data
+pop_path <- file.path(base_dir, "totalbefolkning_stockholm_lan.gpkg")      # Population grid data
+admin_path <- file.path(base_dir, "stockholm_lan_district.gpkg")           # Administrative districts
+out_ix_gpkg <- file.path(base_dir, "district_population.gpkg")             # Output intersection file
+
+# VARIABLES EXPLAINED:
+# - pop_path: Contains population counts in grid cells (Ruta = grid cell, POP = population)
+# - admin_path: Contains administrative district boundaries (distriktskod = district code, distriktsnamn = district name)
+# - tas_nc_path: NetCDF file with daily temperature data (tas = temperature at surface)
+
+# ------------------------------------------------------------------------------
+# 2. LOAD SPATIAL DATA
+# ------------------------------------------------------------------------------
+
+# Load population grid data as vector (polygon) format
+popu <- terra::vect(pop_path)
+cat("Population data loaded. Number of grid cells:", nrow(popu), "\n")
+
+# Load administrative district boundaries
+admin <- terra::vect(admin_path)
+cat("Administrative data loaded. Number of districts:", nrow(admin), "\n")
+
+# Check the column names and first few rows of each dataset
+print("Population data columns:")
+print(names(popu))
+print("Administrative data columns:")
+print(names(admin))
+
+# ------------------------------------------------------------------------------
+# 3. SPATIAL INTERSECTION AND AREA CALCULATIONS
+# ------------------------------------------------------------------------------
+
+# CONCEPT: Spatial intersection creates new polygons where population grid cells
+# overlap with administrative districts. This allows us to calculate how much of
+# each population grid cell falls within each district.
+
+# Perform spatial intersection between population grid and administrative boundaries
+cat("Performing spatial intersection...\n")
+ix <- terra::intersect(popu, admin)
+cat("Intersection complete. Number of intersected polygons:", nrow(ix), "\n")
+
+# Calculate area of each intersected polygon in square meters
+ix$area <- terra::expanse(ix)
+
+# Calculate area fraction in square kilometers
+# This represents the area of each intersection polygon
+ix$frac <- ix$area / 1e+06  # Convert from m² to km²
+
+# Save the intersection results for use in Part B
+writeVector(ix, out_ix_gpkg, filetype = "GPKG", overwrite = TRUE)
+cat("Intersection data saved to:", out_ix_gpkg, "\n")
+
+# ------------------------------------------------------------------------------
+# 4. VISUALIZATION AND QUALITY CHECK
+# ------------------------------------------------------------------------------
+
+# Create side-by-side plots to visualize the spatial intersection
+par(mfrow = c(1,2))
+
+# Plot 1: Original administrative districts with population grid overlay
+plot(admin, main = "Districts with Population Grid", 
+     col = "lightblue", border = "blue", lwd = 2)
+plot(popu, add = TRUE, border = "grey80", lwd = 0.5)
+
+# Plot 2: Intersected polygons (result of spatial intersection)
+plot(ix, main = "Intersected Polygons (Grid × District)", 
+     col = rainbow(nrow(ix), alpha = 0.7), border = "grey80", lwd = 0.3)
+
+# Reset plotting parameters
+par(mfrow = c(1,1))
+```
+
+### **Exercise A1: Understanding the Data Structure**
+
+**Question A1.1:** After loading the population and administrative data, examine their structure using `names()` and `nrow()`. How many population grid cells and administrative districts do we have?
+
+**Question A1.2:** What do the variables `POP`, `distriktskod`, and `distriktsnamn` represent? Why are these variables important for our analysis?
+
+**BONUS QUESTION**
+**Question A1.3:** Use the `terra::crs()` function to check the coordinate reference system of both datasets. Are they the same? Why is this important?
+
+### **Exercise A2: Spatial Intersection Concept**
+
+**Question A2.1:** Before running the intersection, predict: Will the number of intersection polygons be greater than, less than, or equal to the number of original population grid cells? Explain your reasoning.
+
+**Question A2.2:** What does the `frac` variable represent? Why do we divide the area by 1e+06?
+
+---
+
+## 4. Part B: Population-Weighted Temperature Calculation
+
+### Theoretical Background
+
+**Population weighting** ensures that temperature exposures reflect where people actually live rather than simple geographic averages. The process involves:
+
+1. **Extracting** temperature values for each intersection polygon
+2. **Weighting** by population density within each polygon  
+3. **Aggregating** to district level using population weights
+
+### R Code for Part B
+
+```{r}
+# ==============================================================================
+# PART B: POPULATION-WEIGHTED TEMPERATURE CALCULATION
+# ==============================================================================
+
+# Define temperature data path
+tas_nc_path <- file.path(base_dir, "tas_NORDIC-3_SMHI-UERRA-Harmonie_RegRean_v1_Gridpp_v1.0.1_day_20180701-20180731.nc")
+
+# ------------------------------------------------------------------------------
+# 5. HELPER FUNCTIONS FOR POPULATION WEIGHTING
+# ------------------------------------------------------------------------------
+
+# FUNCTION 1: Calculate population-weighted averages
+weighted_population <- function(exposure, shap, days) {
+  # Convert spatial data and exposure values to data.table format for fast processing
+  shap <- as.data.table(as.data.frame(shap))
+  exposure <- as.data.table(exposure)
+  
+  # Attach extracted temperature values to shapefile data
+  shap[, var := exposure[[1]]]
+  
+  # Remove polygons with missing temperature data (e.g., over water bodies)
+  cat('Removing NA values...\n')
+  shap <- shap[complete.cases(shap$var)]
+  exposure <- exposure[complete.cases(exposure[[1]])]
+  
+  # POPULATION WEIGHTING CALCULATION:
+  # Step 1: Calculate population contribution of each intersection polygon
+  shap[, pop_inc := POP * frac]  # Population × area fraction
+  
+  # Step 2: Calculate weights (proportion of total district population)
+  shap[, weights := pop_inc / sum(pop_inc), by = distriktskod]
+  
+  # Assign formatted date-time column names to exposure data
+  names(exposure) <- format(days, "%Y-%m-%dT%H:%M:%SZ")
+  
+  # Apply population weights to temperature values
+  cat('Calculating population-weighted temperature...\n')
+  exposure <- exposure * shap$weights
+  
+  # Add district identifier for grouping
+  exposure[, location := shap$distriktskod]
+  
+  # Aggregate weighted values by district (sum of weighted temperatures)
+  exposure <- exposure[, lapply(.SD, sum), by = location]
+  
+  # Reshape from wide to long format: one row per district-date combination
+  cat('Reshaping data to long format...\n')
+  exposure <- melt(exposure, id.vars = "location", 
+                   variable.name = "date", value.name = 'tas')
+  
+  # Sort by location for consistent output
+  exposure <- exposure[order(location)]
+  
+  cat('Population weighting complete!\n')
+  return(exposure)
+}
+
+# FUNCTION 2: Process NetCDF climate data and calculate district averages
+create_dte <- function(file, v) {
+  # Load temperature raster data from NetCDF file
+  nc <- terra::rast(file)
+  cat("Loaded NetCDF with", nlyr(nc), "time layers\n")
+  
+  # Extract date information from raster time dimension
+  sday <- format(min(terra::time(nc)), "%Y-%m-%d")
+  eday <- format(max(terra::time(nc)), "%Y-%m-%d")
+  
+  cat("Processing data from", sday, "to", eday, "\n")
+  
+  # Generate sequence of daily timestamps
+  days <- seq(from = as.POSIXct(sday, tz = 'UTC'), 
+              to = as.POSIXct(eday, tz = 'UTC') + 1*60*60*23, 
+              by = '1 day')
+  
+  # Assign date names to raster layers
+  names(nc) <- days
+  
+  # Reproject raster to match vector coordinate system
+  nc <- terra::project(nc, terra::crs(v))
+  
+  # Extract mean temperature for each intersection polygon
+  cat("Extracting temperature values for each polygon...\n")
+  e <- exact_extract(nc, st_as_sf(v), fun = 'mean', max_cells_in_memory = 1e+09)
+  
+  # Calculate population-weighted district averages
+  dte <- weighted_population(e, v, days)
+  
+  return(dte)
+}
+
+# ------------------------------------------------------------------------------
+# 6. CALCULATE POPULATION-WEIGHTED TEMPERATURE BY DISTRICT
+# ------------------------------------------------------------------------------
+
+# Load the intersection data created in Part A
+district_pop <- st_read(out_ix_gpkg)
+cat("Loaded intersection data with", nrow(district_pop), "polygons\n")
+
+# Process temperature data and calculate population-weighted district averages
+cat("Processing temperature data...\n")
+dte <- create_dte(tas_nc_path, district_pop)
+
+# Convert temperature from Kelvin to Celsius
+dte[, tas := tas - 273.15]  # tas [K] → tas [°C]
+
+# Display summary of the processed data
+cat("Temperature data summary:\n")
+print(summary(dte$tas))
+rng <- range(as.Date(dte$date), na.rm = TRUE)
+cat("Date range:", format(rng[1]), "to", format(rng[2]), "\n")
+cat("Number of districts:", length(unique(dte$location)), "\n")
+
+# Save the processed temperature data
+csv_out <- file.path(base_dir, "district_tas.csv")
+fwrite(dte, csv_out)
+cat("Temperature data saved to:", csv_out, "\n")
+```
+
+### **Exercise B1: Understanding Population Weights**
+
+**Question B1.1:** In the `weighted_population` function, what does `pop_inc` represent? How is it calculated?
+
+**Question B1.2:** The weights are calculated as `pop_inc / sum(pop_inc)` grouped by district. What do these weights represent conceptually?
+
+**Question B1.3:** Why do the weights within each district sum to 1? What would happen if they didn't?
+
+### **Exercise B2: NetCDF Data Processing**
+
+**Question B2.1:** What does "tas" stand for in climate data? What are the typical units for this variable?
+
+**Question B2.2:** In the `create_dte` function, why do we reproject the raster data using `terra::project()`?
+
+**Question B2.3:** The function uses `exact_extract()` with `fun = 'mean'`. What other functions could we use, and when might they be appropriate?
+
+### **Exercise B3: Temperature Unit Conversion**
+
+**Question B3.1:** Climate data often comes in Kelvin. What is the conversion factor from Kelvin to Celsius? Why might this conversion be important for interpretation?
+
+**Question B3.2:** After conversion, examine the temperature range using `summary(dte$tas)`. Are these values reasonable for Stockholm in July 2018?
+
+---
+
+## 5. Part C: Linking Climate Data with Health Data
+
+### Theoretical Background
+
+**DLNM analysis** requires:
+- Complete time series (no missing days)
+- Binary outcome indicators (event/no event)
+- Consistent exposure data for all individuals
+- Relevant confounding variables
+
+**Time series structure** ensures we can:
+- Model lag effects properly
+- Account for temporal correlation
+- Include sufficient baseline period
+
+### R Code for Part C
+
+```{r}
+# ==============================================================================
+# PART C: LINKING CLIMATE DATA WITH HEALTH DATA
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 7. CREATE COMPREHENSIVE TIME SERIES FOR DLNM ANALYSIS
+# ------------------------------------------------------------------------------
+
+# Load Asthma exacerbations data (cases when health outcomes occurred)
+# including primary care, hospitalizations, and emergency visits
+cases <- fread(paste0(base_dir, "/health_events.csv"))
+cat("Loaded health events data with", nrow(cases), "observations\n")
+
+# Sort cases by individual ID and date for consistent processing
+setorder(cases, id, date)
+
+# Examine the cases dataset
+print("Health events data structure:")
+print(str(cases))
+print("First few rows:")
+print(head(cases))
+
+# Create complete time series for DLNM analysis
+# Date range: December 1, 2017 to December 31, 2018 (includes lag period)
+date_range <- seq(as.Date("2017-12-01"), as.Date("2018-12-31"), by = "day")
+all_ids <- unique(cases$id)
+
+cat("Creating time series for", length(all_ids), "individuals over", 
+    length(date_range), "days\n")
+
+# Generate all possible combinations of individual ID and date
+time_series <- data.table(expand.grid(id = all_ids, date = date_range))
+setorder(time_series, id, date)
+
+# ------------------------------------------------------------------------------
+# 8. ADD HEALTH OUTCOME INDICATORS
+# ------------------------------------------------------------------------------
+
+# Mark health events with outcome = 1
+cases[, outcome := 1]
+
+# Merge health events with complete time series
+# All unmatched dates get outcome = 0 (no health event)
+time_series <- merge(time_series, cases, by = c("id", "date"), all.x = TRUE)
+time_series[is.na(outcome), outcome := 0]
+
+# Health outcome summary
+cat("Health outcome summary:\n")
+print(table(time_series$outcome))
+
+# ------------------------------------------------------------------------------
+# 9. ADD TEMPERATURE EXPOSURE DATA
+# ------------------------------------------------------------------------------
+
+# Load daily temperature data for the study location
+temp_data <- fread(paste0(base_dir, "/tas_212098_daily.csv"))
+temp_data$date <- as.Date(temp_data$date)
+names(temp_data)[2] <- "temp"  # Standardize temperature column name
+
+# Convert temperature from Kelvin to Celsius
+temp_data$temp <- temp_data$temp - 273.15
+
+# Temperature data summary
+cat("Temperature data summary:\n")
+print(summary(temp_data$temp))
+
+# Merge temperature data with time series
+time_series <- merge(time_series, temp_data, by = "date", all.x = TRUE)
+setorder(time_series, id, date)
+
+# ------------------------------------------------------------------------------
+# 10. ADD INDIVIDUAL CHARACTERISTICS (CONFOUNDERS)
+# ------------------------------------------------------------------------------
+
+# Load cohort information containing individual characteristics
+cohort_info <- fread(paste0(base_dir, "/cohort_info.csv"))
+
+# Add smoking status as a potential confounder
+time_series <- merge(time_series, cohort_info[, .(id, smoking)], by = "id", all.x = TRUE)
+
+# Final sorting by individual ID and date
+setorder(time_series, id, date)
+
+# Final dataset examination
+cat("Final time series dataset summary:\n")
+print(str(time_series))
+cat("Number of observations:", nrow(time_series), "\n")
+rng <- range(as.Date(as.character(time_series$date)))
+cat("Date range:", format(rng[1]), "to", format(rng[2]), "\n”)
+cat("Date range:", range(time_series$date), "\n")
+
+# Save the complete time series dataset for DLNM analysis
+final_output <- paste0(base_dir, "/time_series.csv")
+fwrite(time_series, file = final_output)
+cat("Complete time series dataset saved to:", final_output, "\n")
+```
+
+### **Exercise C1: Health Data Structure**
+
+
+**Question C1.1:** We create a date range from 2017-12-01 to 2018-12-31. Why do we include dates before our main study period?
+
+**Question C1.2:** How many total observations are created in the `time_series` dataset? How does this relate to the number of individuals and time period?
+
+### **Exercise C2: Outcome Variable Creation**
+
+**Question C2.1:** What does `outcome = 1` vs `outcome = 0` represent in our final dataset?
+
+**Question C2.2:** Most observations will have `outcome = 0`. Why is this expected, and why do we need these zero observations?
+
+### **Exercise C3: Exposure Assignment**
+
+**Question C3.1:** We merge the same temperature data with all individuals. What assumption does this make about temperature exposure?
+
+**Question C3.2:** In reality, individuals might have different temperature exposures. What factors could cause this variation?
+
+### **Exercise C4: Confounding Variables**
+
+**Question C4.1:** We include smoking status as a confounder. Why might smoking be related to both temperature exposure effects and health outcomes?
+
+**Question C4.2:** What other individual-level or area-level confounders might be important for this analysis?
+
+**Question C4.3:** How do we handle time-varying vs. time-invariant confounders in this dataset structure?
+
+---
+
+## 6. Summary and Next Steps
+
+### What We've Accomplished
+
+✅ **Spatial intersection**: Combined population and administrative data  
+✅ **Population weighting**: Calculated realistic temperature exposures  
+✅ **Data processing**: Extracted and processed climate data  
+✅ **Time series creation**: Built complete datasets for DLNM analysis  
+✅ **Data integration**: Linked exposures with health outcomes
+
+### Datasets Created
+
+- `district_population.gpkg` - Intersection polygons with area fractions
+- `district_tas.csv` - Population-weighted daily temperatures by district
+- `time_series.csv` - Complete dataset ready for DLNM analysis
+
+### Key Learning Points
+
+- Population weighting improves exposure assessment accuracy
+- Spatial intersection preserves important geographical relationships  
+- Complete time series are essential for lag effect modeling
+- Data structure affects analytical possibilities and interpretation
+
+---
+
+## 7. Answer Key
+
+### Exercise 0 Answers
+
+**A0.1:** The path should be updated to your local directory structure, for example: `"C:/Users/YourName/Workshop_Data/"` or similar.
+
+**A0.2:** Check with `sessionInfo()`. Package versions matter because different versions may have different functions, default parameters, or bug fixes that could affect results.
+
+### Exercise A Answers
+
+**A1.1:** Use `nrow(popu) 5428 ` and `nrow(admin) `. The exact numbers will be 5428 and 135 respectively.
+
+**A1.2:** 
+- `POP`: Population count in each grid cell
+- `distriktskod`: Numeric district code
+- `distriktsnamn`: District name in Swedish
+
+**A1.3:** Use `terra::crs(popu)` and `terra::crs(admin)`. Both should be in SWEREF99 TM (EPSG:3006) for Sweden. Matching CRS is essential for accurate spatial operations.
+
+**A2.1:** The number of intersection polygons will typically be greater than the number of original population grid cells because grid cells can be split across multiple districts.
+
+**A2.2:** `frac` represents the area of each intersection polygon in km². We divide by 1e+06 to convert from square meters (the default unit) to square kilometers for easier interpretation.
+
+### Exercise B Answers
+
+**B1.1:** `pop_inc` represents the population contribution of each intersection polygon, calculated as population × area fraction.
+
+**B1.2:** Weights represent the proportion of each district's total population that lives in each intersection polygon.
+
+**B1.3:** Weights sum to 1 to ensure the final weighted average is mathematically correct. If they didn't sum to 1, we'd be over- or under-weighting the district.
+
+**B2.1:** "tas" stands for "temperature at surface" - the air temperature near the ground. Units are typically Kelvin in climate datasets.
+
+**B2.2:** Reprojection ensures the raster and vector data use the same coordinate system, enabling accurate spatial operations.
+
+**B2.3:** Other functions include 'sum', 'max', 'min', 'median'. Choice depends on the research question and data characteristics.
+
+**B3.1:** Subtract 273.15 to convert Kelvin to Celsius. This makes interpretation easier and matches local weather reporting.
+
+**B3.2:** 13.04 to 26.29 are reasonable for Stockholm summer temperatures (typically 15-25°C).
+
+### Exercise C Answers
+
+
+**C1.1:** The pre-period allows for proper lag modeling in DLNM - we need exposure history before health events.
+
+**C1.2:** Total observations = number of individuals × number of days which is (300 X 365 +31) = *1188000* . This creates the complete time series needed for DLNM.
+
+**C2.1:** `outcome = 1` means a health event occurred on that day; `outcome = 0` means no event occurred.
+
+**C2.2:** Most days are event-free for most people. Zero observations provide the baseline risk and allow proper relative risk estimation.
+
+**C3.1:** This assumes all individuals in the study area experience the same temperature exposure.
+
+**C3.2:** Factors include: housing quality, air conditioning access, time spent outdoors, workplace conditions, mobility patterns.
+
+**C4.1:** Smoking affects baseline health risk and may modify temperature sensitivity (e.g., through  respiratory and/or cardiovascular effects).
+
+**C4.2:** Age, sex, socioeconomic status, housing type, occupation, comorbidities, air pollution, green space access.
+
+**C4.3:** Time-invariant confounders (like smoking) are included once per individual. Time-varying confounders would need daily measurements.
+
+---
+
+*This practical session provides a solid foundation for understanding how environmental and health data are prepared for sophisticated epidemiological analysis. The next session will focus on implementing and interpreting DLNM models using these prepared datasets.*
