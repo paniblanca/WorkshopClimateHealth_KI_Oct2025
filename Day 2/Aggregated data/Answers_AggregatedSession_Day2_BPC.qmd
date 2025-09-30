@@ -1,0 +1,263 @@
+---
+title: "Answers Aggregated Session - Day2"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+# Practical Exercise Aggregated data - Answers Day 2
+
+Here are the answers to the 19 questions of the Practical Exercise of the Aggregated data session (Day 2). If you have any questions, feel free to email me at blanca.paniello\@isglobal.org
+
+```{r}
+
+# YOU CAN SKIP THIS IF YOU HAVE ALREADY RUN THE DATA 
+
+library(dplyr)       
+library(ggplot2) 
+library(lubridate) 
+library(ISOweek) 
+
+# Change to your folder
+setwd("C:/Users/bpaniello/Documents/KI_Oct2025")
+
+load("datatable_temp_es_se_fr.RData")
+
+# Ensure columns are numeric
+datatable_temp$year <- as.numeric(datatable_temp$year)  # Year of observation
+datatable_temp$woy  <- as.numeric(datatable_temp$woy)   # Week of year
+datatable_temp$temp <- as.numeric(datatable_temp$temp)  # Temperature (Kelvin)
+
+# Convert temperature from Kelvin to Celsius
+datatable_temp$temp <- datatable_temp$temp - 273.15
+
+# Load weekly mortality data
+load("datatable_mort_es_se_fr.RData")
+
+# Ensure numeric format
+datatable_mort$year <- as.numeric(datatable_mort$year)
+datatable_mort$woy  <- as.numeric(datatable_mort$woy)   # Week of year
+datatable_mort$mort <- as.numeric(datatable_mort$mort)  # Mortality count
+
+# Merge mortality with combined temperature table
+datatable_data <- left_join(datatable_mort, datatable_temp,
+                            by = c("location", "year", "woy"))
+
+# Clean up memory by removing temporary datasets
+rm(datatable_mort, datatable_temp)
+
+# Add actual calendar date (Thursday of each ISO week) 
+# ISOweek format: YYYY-Www-d (d = weekday, 4 = Thursday)
+datatable_data$date <- ISOweek2date(
+  paste0(datatable_data$year, "-W", 
+         sprintf("%02d", datatable_data$woy), "-", 4)
+)
+
+load("METATABLE_es_se_fr.RData")
+
+```
+
+### Question 1: How many rows and columns are in the dataset?
+
+```{r}
+
+cat("Number of rows =", nrow(datatable_data), "\n")
+cat("Number of columns =", ncol(datatable_data), "\n\n")
+
+```
+
+We have 146112 rows (observations) and 6 columns including location, year, week of the year (woy), mortality, temperature and date.
+
+### Question 2: How many regions are included? (in total and per country?)
+
+```{r}
+
+regions_total <- length(unique(datatable_data$location)) 
+cat("Total number of regions:", regions_total, "\n")
+
+regions_by_country <- METATABLE %>%
+  group_by(nuts0) %>%
+  summarise(n_regions = n_distinct(location)) %>%
+  arrange(desc(n_regions))
+
+print(regions_by_country)
+
+```
+
+In total, we have 176 regions among three countries. For France, we have data for 96 regions. For Spain, we have data for 59 regions. For Sweden, we have data for 21 regions.
+
+### Question 3: What is the total mortality across all regions? And per country?
+
+```{r}
+
+# Overall
+print(paste0("Total Mortality: ", sum(datatable_data$mort, na.rm = TRUE)))
+
+# Spain
+metadata_es <- METATABLE %>% 
+  filter(METATABLE$nuts0 == "ES")
+
+datetable_es <- datatable_data %>% 
+  filter(location %in% metadata_es$location)
+
+print(paste0("Total Mortality Spain: ", sum(datetable_es$mort, na.rm = TRUE)))
+
+# Sweden
+metadata_se <- METATABLE %>% 
+  filter(METATABLE$nuts0 == "SE")
+
+datetable_se <- datatable_data %>% 
+  filter(location %in% metadata_se$location)
+
+print(paste0("Total Mortality Sweden: ", sum(datetable_se$mort, na.rm = TRUE)))
+
+# France
+metadata_fr <- METATABLE %>% 
+  filter(METATABLE$nuts0 == "FR")
+
+datetable_fr <- datatable_data %>% 
+  filter(location %in% metadata_fr$location)
+
+print(paste0("Total Mortality France: ", sum(datetable_fr$mort, na.rm = TRUE)))
+
+```
+
+Overall, we have a total of 17,281,315 deaths among the three countries. Spain has 9,182,220 deaths in total, Sweden has 2,080,796 deaths and France 6,018,299 deaths, thus being Spain the country with more all-cause total mortality.
+
+### Question 4: What is the time range (earliest and latest dates) covered by the data (total and per country)?
+
+```{r}
+
+# Total
+print(summary(datatable_data$date))
+
+# Spain
+print(summary(datetable_es$date))
+
+# Sweden
+print(summary(datetable_se$date))
+
+# France
+print(summary(datetable_fr$date))
+
+```
+
+Overall, the earliest date is 6th of January of 2000 and the latest date is 29th of December of 2022. Moreover, we see that, although Spain and Sweden have the same data length, France has data from the 3rd of January of 2013. Although this is not ideal, this is quite common in aggregated data studies since different locations and countries have registries starting at different data points.
+
+Finally, we will restrict our data to end of 2019 for simplicity reasons since we might find some abnormal fluctuations due to the COVID-19 pandemic.
+
+### Question 5: What does the distribution of temperature (temp) look like overall and by country?
+
+```{r}
+
+# Overall 
+print(summary(datatable_data$temp))
+
+datatable_with_meta <- datatable_data %>%
+  left_join(dplyr::select(METATABLE, location, nuts0), by = "location")
+
+# Spain
+print(summary(datetable_es$temp))
+
+# Sweden
+print(summary(datetable_se$temp))
+
+# France
+print(summary(datetable_fr$temp))
+
+# Optional graph
+ggplot(datatable_with_meta, aes(x = nuts0, y = temp)) +
+  geom_boxplot() + xlab("Country (nuts0)") + ylab("Weekly mean temp") + ggtitle("Temp distribution by country")
+
+```
+
+Overall, the minimum temperature is -22.98ºC and the maximum is 33.97ºC.
+
+For Spain, the minimum temperature is -4.44ºC and the maximum is 33.97ºC. For Sweden, the minimum temperature is -22.98ºC and the maximum is 24.10ºC. For France, the minimum temperature is -8.64ºC and the maximum is 29.90ºC.
+
+Therefore, the overall minimum temperature comes from Sweden and the maximum from Spain.
+
+### Question 6: Plot the time series of weekly mortality and of weekly mean temperature for an average year. Do you notice any seasonal patterns in either series?
+
+```{r}
+
+# Average across years by week-of-year
+avg_by_woy <- datatable_data %>%
+  group_by(woy) %>%
+  summarise(mean_mort = mean(mort, na.rm=TRUE),
+            mean_temp = mean(temp, na.rm=TRUE)) %>%
+  arrange(woy)
+
+# Plot
+mort <- ggplot(avg_by_woy, aes(x=woy)) +
+  geom_line(aes(y = mean_mort)) +
+  ggtitle("Average-year weekly mortality (by week-of-year)")
+
+temp <- ggplot(avg_by_woy, aes(x=woy)) +
+  geom_line(aes(y = mean_temp), color = "red") +
+  ggtitle("Average-year weekly mean temperature (by week-of-year)")
+
+print(mort); print(temp)
+
+```
+
+For the average-year weekly mortality, we observe the mortality is higher in winter (first and last weeks of the year), while the mortality is lower during the summer. Nonetheless, we observe that during the central months of summer (July to August) we can see slight peaks of mortality, likely related to heat (and heatwaves).For mortality, there's a clear trend with higher temperatures during the summer and lower temperatures during the winter, as expected.
+
+### Question 7: What type of regression model is used in this stage, and why is it suitable for mortality counts?
+
+We use a quasi-Poisson regression within a generalized linear model (GLM). This is suitable because mortality is count data, which follows a Poisson distribution, but in practice mortality counts are often over dispersed (variance larger than the mean). The quasi-Poisson accounts for this extra variability while retaining interpretability.
+
+### Question 8: Why do we include a seasonality term (ns(wop, df = ...)) in the model?
+
+The natural spline for week-of-year (or similar seasonal variable) controls for long-term seasonal patterns such as influenza peaks or winter mortality. Without this adjustment, the estimated temperature--mortality association could be confounded by underlying seasonal cycles.
+
+### Question 9: What are the two dimensions that are combined in a cross-basis function?
+
+In the cross-basis function we combine two dimensions, the exposure-response association (temperature and mortality) and the lag-response association (delayed effects of temperature on mortality). This two-dimensional function allows us to capture both the shape of the risk curve and how long the effect persists.
+
+### Question 10: Why is it important to include lagged effects when modelling temperature and mortality?
+
+Temperature does not only affect mortality on the same day. Cold-related mortality often occurs with a delay (e.g. several days or weeks later due to infections or cardiovascular stress), while heat-related mortality tends to be more immediate. Ignoring lags would underestimate or miss-attribute the true effect of temperature on mortality.
+
+### Question 11: How are the location of knots for temperature defined in the script?
+
+Knots are placed at the 10th, 50th, and 90th percentiles of each location's temperature distribution. This ensures flexibility in the spline while adapting to the local climate range.
+
+### Question 12: What do the cen and at arguments control?
+
+'at' specifies the temperatures where predictions (e.g., relative risks) are calculated. 'cen' sets the centering temperature --- the reference point for relative risks (usually the Minimum Mortality Temperature, MMT).
+
+### Question 13: What's the purpose of centering at the Minimum Mortality Temperature (MMT)?
+
+By centering at the MMT, the model compares risks at other temperatures relative to the point of lowest mortality risk. This provides a meaningful reference, avoiding arbitrary choices like the mean or median temperature.
+
+### Question 14: How does the model determine the Minimum Mortality Temperature (MMT)?
+
+The MMT is identified empirically from the exposure--response curve: it is the temperature at which the predicted relative risk of mortality is lowest. The model searches across the fitted curve and selects this minimum.
+
+### Question 15: Why do we need to save both the coefficients and covariance matrices for the second-stage meta-analysis?
+
+The coefficients represent the estimated associations for each location. The covariance matrices capture the uncertainty and correlation between coefficients within each location. Both are necessary so the second-stage meta-analysis (e.g. mixmeta) can properly weight each region by its precision and account for uncertainty.
+
+### Question 16: Based on the Wald-test results, do all meta predictors explain part of the association? Assess their significance.
+
+If the Wald test shows that the p-values for meta-predictors are below 0.05, then they significantly explain part of the heterogeneity in temperature--mortality associations. This means the variation across regions is partly attributable to these predictors. In our case, both TEMP_AVG and TEMP_IQR are significant.
+
+### Question 17: What differences do you observe between the regional (non-meta) and meta-analysis plots?
+
+Regional estimates alone tend to have wider, more unstable confidence intervals. After pooling with meta-analysis, the estimates are shrunk toward the overall mean, resulting in narrower confidence intervals and smoother curves. This reflects borrowing strength across locations by applying the mixmeta and blups functions.
+
+### Question 18: Compare regions of Sweden, France, and Spain. What differences appear in the exposure-response curves? How does the regional cumulative curve differ?
+
+Generally we can observe that the confidence intervals are bigger in extreme temperatures. This is because there's less days in the year getting to such degrees, thus having a lower sample.
+
+For Spain, we can observe that most regions have an MMT between 15 and 25 degrees with a sharp increase for warm temperatures and a slight progressive increase in moderate cold temperatures and a steeper increase in extreme temperatures. This same trend can be observed for regions in France. Nonetheless, in most of the Swedish regions we observe that the MMT is around 20ºC and then an increase in colder temperatures and no heat-related mortality. This is because most of the regions of Sweden do not get to such higher temperatures, thus only showing cold-related mortality.
+
+### Question 19: Interpret the final cumulative curve for the three countries.
+
+In the overall cumulative curve we observe that the MMT is in 18.36ºC with heat-related mortality getting to a RR of 1.15 and a cold-related mortality of nearly 1.35. On one hand, for heat-related mortality (temperatures above the MMT) we see big confidence intervals. This is due to the fact that most regions in Sweden do not have heat-related mortality, which means that the number of contributing regions is lower and there's higher variability regarding the risk in those temperatures among all the regions.
+
+When assessing cold-related mortality, we observe a progressive increase in moderate cold temperatures and slight steeper increase in more extreme temperatures. For moderate cold temperatures we can see that the confidence interval is bigger than the extreme cold temperatures. This is because the variability in the risk in extreme temperatures is lower and more consistent across regions, thus having smaller CIs than in the moderate temperatures, where there's bigger variability among regions.
+
+Overall, as we can see in the differences between regions and countries, we need to interpret these overall curves in a conservative way as they are the "average" representation of all our units but do not necessarily represent the risk in each region. That's why the overall evaluation needs to be done with the regional curves too to have a better insight of the temperature-related risks. Regional curves remain essential to capture local vulnerabilities and climate realities.
