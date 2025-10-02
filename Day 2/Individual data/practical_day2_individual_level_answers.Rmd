@@ -1,0 +1,506 @@
+---
+title: "Practical session:  Modelling Associations Between Climatic Factors & Health
+  Outcomes Using Individual-Level Data"
+author: "Isabel Walter"
+date: "02-10-2025"
+output:
+  html_document: default
+  word_document: default
+---
+
+## Setup
+```{r setup, include=FALSE}
+# Cleaning environment
+rm(list = ls())
+
+####################### Loading libraries
+library(dplyr)
+library(gnm)
+library(dlnm)
+library(ggplot2)
+library(lubridate)
+
+# --- Set working directory (adjust path to your system) ---
+setwd("/Users/isabelwalter/Desktop/PhD/Workshop/Practicals/Day 2 - individual level")
+
+df <- read.csv("data/time_series.csv")
+```
+
+## Exploring the dataset
+Exploring the dataset is an important first step before doing any formal analysis. It helps us understand what information is available, how it is structured, and what the data look like in practice. We summarise the number of individuals, follow-up time, outcomes, and exposures such as temperature or smoking, to get a clearer picture of the study setting.
+
+```{r}
+
+# -------------------------------
+# Q1. How many rows and columns are in the dataset?
+# Answer: 1188000 rows, 5 columns.
+# -------------------------------
+dim(df)        # rows, columns
+str(df)        # structure
+
+# -------------------------------
+# Q2. How many unique individuals are there?
+# Answer: 3000
+# -------------------------------
+n_distinct(df$id)
+
+# -------------------------------
+# Q3. What does the distribution of temperature (temp) look like?
+# Answer:
+# The distribution of daily mean temperatures ranges from about –12°C to 25°C, with most values 
+# falling between –5°C and 20°C. The histogram shows several peaks rather than a single bell shape, #
+# meaning the data are multi-modal. The highest concentration of temperatures is around 0°C, but
+# there are also clear clusters near 8–10°C and 15–18°C. Very cold days below –10°C and very warm
+# days above 22°C are relatively uncommon. This pattern suggests that the temperatures vary by
+# season, with different modes corresponding to typical conditions in winter, spring/autumn, and
+# summer.
+# -------------------------------
+
+ggplot(df, aes(x = temp)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of daily mean temperature")
+
+summary(df$temp)  # basic summary stats
+
+# -------------------------------
+# Q4. How many days of follow-up are there on average per individual?
+# Answer: 396 days (a calendar year + preceding month). 
+# It is the same for all individuals, nobody died during follow-up. 
+# -------------------------------
+follow_up <- df %>%
+  group_by(id) %>%
+  summarise(days_followed = n())
+
+summary(follow_up$days_followed)
+
+# -------------------------------
+# Q5. On average, how many asthma exacerbations per person?
+# Answer: 23.42
+# -------------------------------
+outcomes_per_person <- df %>%
+  group_by(id) %>%
+  summarise(total_outcomes = sum(outcome))
+
+mean(outcomes_per_person$total_outcomes)
+
+# Distribution across people
+summary(outcomes_per_person$total_outcomes)
+
+# -------------------------------
+# Q6. How many individuals had no outcomes at all?
+# Also, remove them from the dataset, as we want cases only.
+# Answer: 0
+# -------------------------------
+outcomes_per_person <- df %>%
+  group_by(id) %>%
+  summarise(total_outcomes = sum(outcome))
+
+# Count individuals with zero outcomes
+sum(outcomes_per_person$total_outcomes == 0)
+
+# Get their IDs
+zero_outcome_ids <- outcomes_per_person %>%
+  filter(total_outcomes == 0) %>%
+  pull(id)
+
+# Remove those individuals from the dataset
+df_clean <- df %>%
+  filter(!id %in% zero_outcome_ids)
+
+# Check: number of rows before vs after
+nrow(df)
+nrow(df_clean)
+
+df <- df_clean
+
+# -------------------------------
+# Q7. How many individuals are smokers (ever smoking == 1)?
+# Answer: 993
+# -------------------------------
+smokers <- df %>%
+  group_by(id) %>%
+  summarise(is_smoker = any(smoking == 1))
+
+sum(smokers$is_smoker == TRUE)
+
+# -------------------------------
+# Q8. Do smokers have more exacerbations on average?
+# Answer: Yes.
+# -------------------------------
+outcomes_with_smoking <- df %>%
+  group_by(id) %>%
+  summarise(total_outcomes = sum(outcome),
+            is_smoker = any(smoking == 1))
+
+outcomes_with_smoking %>%
+  group_by(is_smoker) %>%
+  summarise(mean_outcomes = mean(total_outcomes))
+
+
+
+```
+
+```{r}
+
+# -------------------------------
+# Q9. Explore the data for one individual:
+#   (a) Plot the time series of asthma exacerbations.
+#.  (b) Plot the time series of mean daily air temperature.
+#   (c) Is the number of asthma exacerbations realistic?
+#   (d) Does there seem to be a correlation between 
+#       temperature and asthma exacerbations?
+# -------------------------------
+
+
+# Pick one person, e.g. Person 5 
+person_id <- 5
+df_person <- df[df$id == person_id, ]
+df_person$date <- as.Date(df_person$date)
+
+# Define start and end dates
+start_date <- as.Date("2018-01-01")
+end_date   <- as.Date("2019-01-01")
+
+# Filter df_person to only include rows between start_date and end_date
+df_person_filtered <- subset(df_person, date >= start_date & date < end_date)
+
+# (a) Exacerbations
+ggplot(subset(df_person_filtered, outcome == 1), aes(x = date, y = 1)) +
+  geom_segment(aes(xend = date, yend = 0), linetype = "dashed", color = "black") +
+  geom_point(color = "darkgreen", size = 2) +
+  scale_y_continuous(limits = c(0, 1.2), breaks = 1, labels = "Day with Event") +
+  scale_x_date(date_labels = "%b",
+               limits = c(start_date, end_date),
+               date_breaks = "1 month") +  
+  labs(title = paste0("Time series of Exacerbations (Person ", person_id, ")"),
+       x = "", y = "") +
+  theme_minimal() +
+  theme(axis.line = element_line(color = "black"),
+        panel.grid.minor = element_blank())
+
+# (b) Temperature
+ggplot(df_person_filtered, aes(x = date, y = temp)) +
+  geom_line(color = "darkgreen") +
+  scale_x_date(date_labels = "%b") +
+  labs(title = paste0("Mean Daily Temperature (Person ", person_id, " area)"),
+       x = "", y = "Temperature (°C)") +
+  theme_minimal() +
+  theme(axis.line = element_line(color = "black"),
+        panel.grid.minor = element_blank())
+
+# Plot both in one figure
+ggplot(df_person_filtered, aes(x = date)) +
+  # Temperature line
+  geom_line(aes(y = temp), color = "darkgreen") +
+  
+  # Exacerbation events as points (jittered slightly on y for visibility)
+  geom_point(data = subset(df_person_filtered, outcome == 1),
+             aes(y = min(temp) - 2),
+             color = "firebrick", size = 2) +
+  geom_segment(data = subset(df_person_filtered, outcome == 1),
+               aes(xend = date, y = min(temp) - 2, yend = min(temp) - 1.5),
+               color = "firebrick", linetype = "dashed") +
+  
+  scale_x_date(date_labels = "%b") +
+  labs(title = paste0("Temperature and Exacerbations (Person ", person_id, ")"),
+       x = "", y = "Temperature (°C)") +
+  theme_minimal() +
+  theme(axis.line = element_line(color = "black"),
+        panel.grid.minor = element_blank())
+
+# -------------------------------
+# (c) Is the number of asthma exacerbations realistic?
+# Answer: No (the number is too high for such a short period for real-world data).
+# -------------------------------
+
+# -------------------------------
+# (d) Does there seem to be a correlation between temperature 
+#     and asthma exacerbations?
+# Answer: Yes, exacerbations occur more often on colder days.
+# -------------------------------
+
+```
+
+## Data modelling
+In the next step we want to model the association between daily mean air temperature and asthma exacerbations. To do this we use a case time series approach. This type of model is well suited for individual-level longitudinal data because it allows us to compare case days with control days within the same person, while accounting for both time and lagged effects of exposure.
+
+```{r}
+# -------------------------------
+# Q10. What are knots, and why do we need them when modelling temperature using splines?
+# Answer: In spline models, knots are the points where the curve is allowed to bend. 
+# By placing knots at chosen percentiles of the temperature distribution, 
+# we allow the model to capture a non-linear relationship between temperature 
+# and asthma exacerbations. 
+# For example, the effect might be different at very cold, moderate, or hot days.
+# -------------------------------
+
+# -------------------------------
+# Q11. How do we define the knots and centering values for temperature?
+# Answer: In practice, we usually place 3 knots across the temperature distribution
+# to capture potential non-linear effects. These are often chosen based
+# on percentiles, following common practice in the literature.
+# -------------------------------
+
+# In this dataset we define:
+# - Internal knots at the 10th, 75th, and 90th percentiles
+# - Boundary knots at the 1st and 99th percentiles
+# - A centering value at the 50th percentile (median)
+# [These are based on temperature values from the underlying
+# temperature dataset]
+
+temp_knots <- c(-2.510472, 16.020317, 19.799403)  # 10%, 75%, 90%
+temp_b_knots <- c(-8.547488, 25.588451)           # 1%, 99%
+cen <- 6.914142                                   # 50%
+
+# -------------------------------
+# Q12. What is the stratum variable, and why do we need it?
+# Answer: We define strata as "subject-month-year". This means each subject’s days 
+# within the same month form one stratum. 
+# Within each stratum, case days (with exacerbations) are compared 
+# with control days (without exacerbations). 
+# This automatically controls for seasonality and individual-level confounding.
+# As our dataset only has data from one year our strata are defined as "subject-month".
+# -------------------------------
+
+df$stratum <- factor(paste(df$id, month(df$date), sep = "-"))
+
+# -------------------------------
+# Q13. Which two dimensions are combined in a cross-basis?
+# Answer: (1) the exposure-response relationship (non-linear function 
+# of temperature), and (2) the lag-response relationship 
+# (effects of exposures on later days, here up to 21 days).
+# This allows us to model both the shape of the effect and how long it lasts.
+# -------------------------------
+
+# -------------------------------
+# Q14. Create the crossbasis using the code in the script. What arguments do 
+# we hand crossbasis()? 
+# Answer: see below.
+# -------------------------------
+# crossbasis
+cbtemp <- crossbasis(df$temp, lag = 21,
+                      argvar = list(fun = "ns", 
+                                    knots = temp_knots, 
+                                    Boundary.knots = temp_b_knots),
+                      arglag = list(fun = "ns", 
+                                    knots = logknots(21, nk = 3)),
+                      group = df$id)
+
+# What arguments do we hand crossbasis()? 
+# 1. The exposure variable
+#    - Here: df$temp (daily mean temperature)
+#
+# 2. The maximum lag
+#    - Here: 21 days, so the model can capture delayed effects
+#
+# 3. The exposure–response function (argvar)
+#    - We specify a natural spline ("ns")
+#    - Knots placed at the chosen percentiles (temp_knots)
+#    - Boundary knots at the extremes of the temperature range (temp_b_knots)
+#
+# 4. The lag–response function (arglag)
+#    - Also a spline ("ns")
+#    - Knots placed on the log scale of lags (logknots)
+#    - This captures two things:
+#        (a) effects may decay or persist over time
+#        (b) effects often vary more in the early lags 
+#            (e.g. the first few days after exposure)
+#
+# 5. The grouping variable
+#    - Here: df$id (individual identifier)
+#    - Ensures the cross-basis is built separately for each subject
+
+# -------------------------------
+# Q15. Fit a poisson regression model with the crossbasis as exposure, 
+# day of week as a covariate, and the stratum variable as fixed effects. 
+# -------------------------------
+# We fit a conditional poisson regression model:
+# - Outcome: daily indicator of asthma exacerbation
+# - Covariates: temperature cross-basis, day of week
+# - Strata: subject-month (via "eliminate")
+day_of_week <- factor(wday(df$date))
+mod <- gnm(outcome ~ cbtemp + day_of_week,
+           eliminate = df$stratum, data = df,
+           family = poisson)
+
+```
+
+## Crossprediction
+Once the model is fitted, we use a crossprediction to translate the estimates into an interpretable curve. The crossprediction shows the relative risk of asthma exacerbations across the observed range of daily mean temperatures, compared to a chosen reference (the centering value, in our case the median). This allows us to visualise and interpret the exposure–response relationship, and later compare it between subgroups such as smokers and non-smokers.
+
+```{r}
+# -------------------------------
+# Q16. Predict and plot the exposure–response curve 
+#      for temperature from our model using the code provided.
+# -------------------------------
+
+# Create cross-prediction object
+cptemp <- crosspred(cbtemp, mod, cen = cen, by = 1.5)
+
+# Convert to a tidy dataframe
+plot_data <- data.frame(
+  exposure = cptemp$predvar,
+  fit      = cptemp$allRRfit,
+  lower    = cptemp$allRRlow,
+  upper    = cptemp$allRRhigh
+)
+
+# Plot using ggplot
+ggplot(plot_data, aes(x = exposure, y = fit)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), 
+              alpha = 0.2, fill = "#1b9e77", color = NA) +
+  geom_line(linewidth = 1, color = "#1b9e77") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = cen, linewidth = 1.2, alpha = 0.5, color = "grey") +
+  annotate("text", x = cen + 2, y = max(plot_data$fit, na.rm = TRUE) * 0.9, 
+           label = "50th percentile", color = "grey20", size = 3) +
+  labs(
+    title = "Exposure-response curve: Asthma exacerbations",
+    x = "Temperature (°C)",
+    y = "Incidence rate ratio (IRR)"
+  ) +
+  scale_y_continuous(breaks = seq(0, 5, 1), expand = c(0, 0)) +
+  scale_x_continuous(breaks = seq(-10, 25, by = 5), expand = c(0, 0)) +
+  coord_cartesian(xlim = c(-10, 25), ylim = c(0, 5)) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 11),
+    axis.line = element_line(linewidth = 0.3, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+    plot.margin = margin(10, 10, 10, 10),
+    plot.background = element_rect(color = "white", fill = "white"),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 0.5)
+  )
+
+# -------------------------------
+# Q17. How do we interpret the exposure–response curve?
+# Answer: The curve shows a U-shaped relationship between daily mean 
+# temperature and asthma exacerbations.
+#
+# - The reference value (IRR = 1) is at the median temperature (~7°C).
+# - At colder temperatures (below ~0°C), the incidence rate ratio (IRR) 
+#   increases to above 2, meaning that the risk of asthma exacerbations 
+#   is more than doubled compared to the reference.
+# - At hotter temperatures (above ~20°C), the IRR also rises above 1, 
+#   suggesting an increased risk during hot days, although the confidence 
+#   intervals are wider (more uncertainty).
+# - Around moderate temperatures (5–15°C), the IRR is close to 1, 
+#   meaning the risk is lowest.
+#
+# In summary, both cold and hot temperatures are associated with a 
+# higher risk of asthma exacerbations, while moderate temperatures 
+# are associated with the lowest risk.
+# -------------------------------
+
+```
+
+```{r}
+# -------------------------------
+# Q18. Compare the temperature–asthma exacerbation association 
+# between smokers and non-smokers by running the provided code. Interpret 
+# the plot.
+# Answer: Both smokers and non-smokers show a U-shaped association between 
+# temperature and asthma exacerbations, with lowest risk around 7°C 
+# and higher risk at both cold and hot extremes.
+#
+# The curve for smokers lies above that of non-smokers at either temperature extreme, 
+# suggesting a higher risk. However, the confidence 
+# intervals overlap throughout, meaning the difference between smokers 
+# and non-smokers is not statistically significant.
+# -------------------------------
+
+# Step 1. Subset the dataset
+# - Smokers: any day with smoking == 1 for that person
+# - Non-smokers: all other individuals
+df_smok <- df %>% 
+  group_by(id) %>% 
+  filter(any(smoking == 1)) %>% 
+  ungroup()
+
+df_non <- df %>% 
+  group_by(id) %>% 
+  filter(all(smoking == 0)) %>% 
+  ungroup()
+
+# Step 2. Create strata variables (subject-month) for each subset
+df_smok$stratum <- factor(paste(df_smok$id, month(df_smok$date), sep = "-"))
+df_non$stratum  <- factor(paste(df_non$id,  month(df_non$date),  sep = "-"))
+
+# Step 3. Build cross-basis for temperature
+cbtemp_smok <- crossbasis(df_smok$temp, lag = 21,
+                           argvar = list(fun = "ns", knots = temp_knots, Boundary.knots = temp_b_knots),
+                           arglag = list(fun = "ns", knots = logknots(21, nk = 3)),
+                           group = df_smok$id)
+
+cbtemp_non <- crossbasis(df_non$temp, lag = 21,
+                          argvar = list(fun = "ns", knots = temp_knots, Boundary.knots = temp_b_knots),
+                          arglag = list(fun = "ns", knots = logknots(21, nk = 3)),
+                          group = df_non$id)
+
+# Step 4. Fit conditional Poisson regression models
+mod_smok <- gnm(outcome ~ cbtemp_smok + factor(wday(df_smok$date)),
+                eliminate = df_smok$stratum, data = df_smok,
+                family = poisson)
+
+mod_non <- gnm(outcome ~ cbtemp_non + factor(wday(df_non$date)),
+               eliminate = df_non$stratum, data = df_non,
+               family = poisson)
+
+# Step 5. Cross-predictions
+cpt_smok <- crosspred(cbtemp_smok, mod_smok, cen = cen, by = 1.5)
+cpt_non  <- crosspred(cbtemp_non,  mod_non,  cen = cen, by = 1.5)
+
+# Step 6. Tidy for plotting
+plot_smok <- data.frame(
+  exposure = cpt_smok$predvar,
+  fit      = cpt_smok$allRRfit,
+  lower    = cpt_smok$allRRlow,
+  upper    = cpt_smok$allRRhigh,
+  group    = "Smoker"
+)
+
+plot_non <- data.frame(
+  exposure = cpt_non$predvar,
+  fit      = cpt_non$allRRfit,
+  lower    = cpt_non$allRRlow,
+  upper    = cpt_non$allRRhigh,
+  group    = "Non-smoker"
+)
+
+plot_data <- rbind(plot_smok, plot_non)
+
+# Step 7. Plot both curves together
+ggplot(plot_data, aes(x = exposure, y = fit, 
+                      color = group, fill = group, linetype = group)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = cen, linewidth = 1.2, alpha = 0.5, color = "grey") +
+  annotate("text", x = cen + 2.5, y = 3.5, label = "50th percentile", 
+           color = "grey20", size = 3) +
+  labs(title = "Exposure–response curves: Asthma exacerbations",
+       x = "Temperature (°C)",
+       y = "Incidence rate ratio (IRR)") +
+  scale_color_manual(values = c("Non-smoker" = "#1b9e77", "Smoker" = "#d95f02")) +
+  scale_fill_manual(values = c("Non-smoker" = "#1b9e77", "Smoker" = "#d95f02")) +
+  scale_linetype_manual(values = c("Non-smoker" = "solid", "Smoker" = "dashed")) +
+  scale_y_continuous(breaks = seq(0, 5, 1), expand = c(0, 0)) +
+  scale_x_continuous(breaks = seq(-10, 25, by = 5), expand = c(0, 0)) +
+  coord_cartesian(xlim = c(-10, 25), ylim = c(0, 5)) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 11),
+    axis.line = element_line(linewidth = 0.3, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 0.5),
+    legend.position = "right",
+    legend.title = element_blank()
+  )
+```
+
